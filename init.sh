@@ -14,6 +14,6 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
   -- User with dot-notation username (postgres.gbrain) matching Supabase
   -- pooler URL format. GBrain's URL validator expects this pattern.
   -- SUPERUSER required for extension creation during gbrain init.
-  CREATE USER "postgres.gbrain" WITH SUPERUSER PASSWORD '${POSTGRES_PASSWORD}';
+  CREATE USER "postgres.gbrain" WITH SUPERUSER BYPASSRLS PASSWORD '${POSTGRES_PASSWORD}';
   GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO "postgres.gbrain";
 EOSQL
