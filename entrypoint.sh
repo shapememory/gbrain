@@ -1,43 +1,31 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # GBrain MCP Server entrypoint
-# Role: wait for Postgres → write config → init schema → gbrain serve
+# Role: wait for Supabase db → init schema → gbrain serve
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
 INIT_MARKER="/root/.gbrain/.initialized"
-CONFIG_FILE="/root/.gbrain/config.json"
 
 log() { echo "[gbrain] $*"; }
 
-# ── 1. Wait for Postgres ──────────────────────────────────────────────────────
-log "Waiting for Postgres at ${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}..."
-until pg_isready \
-    -h "${POSTGRES_HOST:-postgres}" \
-    -p "${POSTGRES_PORT:-5432}" \
-    -U "${POSTGRES_USER:-gbrain}" -q; do
+# ── 1. Wait for Supabase Postgres ─────────────────────────────────────────────
+# Supabase db container is reachable as "supabase-db" via the supabase-gbrain
+# network. Extract host from DATABASE_URL for pg_isready.
+DB_HOST=$(echo "$DATABASE_URL" | sed 's|.*@||' | sed 's|:.*||' | sed 's|/.*||')
+DB_PORT=$(echo "$DATABASE_URL" | sed 's|.*:||' | sed 's|/.*||')
+DB_USER=$(echo "$DATABASE_URL" | sed 's|.*://||' | sed 's|:.*||')
+
+log "Waiting for Supabase Postgres at ${DB_HOST}:${DB_PORT:-5432}..."
+until pg_isready -h "${DB_HOST}" -p "${DB_PORT:-5432}" -U "${DB_USER:-postgres}" -q; do
   sleep 2
 done
-log "Postgres is ready."
+log "Supabase Postgres is ready."
 
-# ── 2. Write config.json from DATABASE_URL ────────────────────────────────────
-# gbrain init --url rejects plain postgresql:// URLs (expects Supabase pooler
-# format). Writing config.json directly bypasses the URL validator entirely.
-# gbrain serve reads DATABASE_URL from env anyway — this just ensures gbrain
-# init also finds the correct engine config when applying schema migrations.
-mkdir -p /root/.gbrain
-cat > "$CONFIG_FILE" <<GBCONFIG
-{
-  "engine": "postgres",
-  "databaseUrl": "${DATABASE_URL}"
-}
-GBCONFIG
-log "Config written: engine=postgres databaseUrl=postgresql://...@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/..."
-
-# ── 3. Schema init / migrations ───────────────────────────────────────────────
+# ── 2. Schema init / migrations ───────────────────────────────────────────────
 if [ ! -f "$INIT_MARKER" ]; then
-  log "First run — applying schema..."
-  gbrain init
+  log "First run — initialising schema..."
+  gbrain init --url "$DATABASE_URL"
 
   if find /brain -name "*.md" -maxdepth 3 2>/dev/null | grep -q .; then
     log "Brain volume has content — importing..."
@@ -54,13 +42,13 @@ if [ ! -f "$INIT_MARKER" ]; then
   log "Init complete."
 else
   log "Applying schema migrations (idempotent)..."
-  gbrain init 2>&1 | grep -v "^$" || true
+  gbrain init --url "$DATABASE_URL" 2>&1 | grep -v "^$" || true
 fi
 
-# ── 4. Health check ───────────────────────────────────────────────────────────
+# ── 3. Health check ───────────────────────────────────────────────────────────
 log "Running gbrain doctor --fast..."
 gbrain doctor --fast 2>&1 || log "Warning: doctor reported issues — check logs"
 
-# ── 5. Start MCP HTTP server ──────────────────────────────────────────────────
+# ── 4. Start MCP HTTP server ──────────────────────────────────────────────────
 log "Starting MCP server on port ${GBRAIN_PORT:-8787}..."
 exec gbrain serve
