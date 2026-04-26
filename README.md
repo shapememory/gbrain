@@ -1,141 +1,173 @@
 # GBrain — Dokploy Deployment
 
-Self-hosted GBrain on Hetzner via Dokploy, connecting to a self-hosted Supabase instance.
+Two Dokploy Compose services on the same Hetzner server, connected via `dokploy-network`.
 
 ```
-[Supabase stack]          [GBrain stack]
-  supabase-db   ←──────── gbrain          :8787  (Traefik)
-  supabase-... (other)     gbrain-worker         (internal)
+[Dokploy project: supabase]      [Dokploy project: gbrain]
+  db (postgres+pgvector)  ←────── gbrain    :8787  (Traefik)
+  studio, kong, auth...            gbrain-worker    (internal)
 
-Shared network: supabase-gbrain
+Shared network: dokploy-network (already exists in Dokploy)
 Scheduler:      Dokploy Schedule Jobs
 ```
 
-## File structure
-
-```
-gbrain-deploy/
-├── Dockerfile             Single image for both gbrain services
-├── docker-compose.yml     2 services: gbrain, gbrain-worker
-├── entrypoint.sh          Wait for Supabase db → init → gbrain serve
-├── worker-entrypoint.sh   Wait for Supabase db + gbrain → Minions supervisor
-└── README.md
-```
-
 ---
 
-## Step 1 — Deploy self-hosted Supabase
+## Part 1 — Deploy Supabase self-hosted in Dokploy
 
-Supabase runs as a **separate Dokploy Compose project**. GBrain connects to
-its database over a shared Docker network.
+### Step 1.1 — Fork and prepare the Supabase repo
 
-On your Hetzner server:
+Fork `https://github.com/supabase/supabase` to your GitHub account.
 
-```bash
-# Clone the official Supabase repo
-git clone --depth 1 https://github.com/supabase/supabase
-cd supabase/docker
+In your fork, open `docker/docker-compose.yml` and make **two changes** to the `db` service:
 
-# Copy and configure environment
-cp .env.example .env
-```
-
-Edit `.env` — minimum required changes:
-
-```env
-POSTGRES_PASSWORD=your_strong_db_password
-JWT_SECRET=your_32char_random_secret
-ANON_KEY=<generate — see below>
-SERVICE_ROLE_KEY=<generate — see below>
-DASHBOARD_USERNAME=supabase
-DASHBOARD_PASSWORD=your_dashboard_password
-API_EXTERNAL_URL=https://supabase.yourdomain.eu
-SITE_URL=https://supabase.yourdomain.eu
-```
-
-Generate `ANON_KEY` and `SERVICE_ROLE_KEY` using the Supabase key generator:
-https://supabase.com/docs/guides/self-hosting/docker#generate-api-keys
-
-Point Supabase's data to your persistent path — in `docker-compose.yml`
-change the db volumes section:
+**Add a fixed container name** (so GBrain can reach it by a known name):
 ```yaml
 db:
-  volumes:
-    - /var/www/hilvara/supabase/db:/var/lib/postgresql/data
+  container_name: supabase-db
+  ...
 ```
 
-Then deploy Supabase as a new Compose service in Dokploy pointing to your
-`supabase/docker` directory.
+**Add `dokploy-network`** to the db service networks and declare it at the bottom:
+```yaml
+db:
+  container_name: supabase-db
+  networks:
+    - default
+    - dokploy-network
+  ...
+
+networks:
+  default:
+    driver: bridge
+  dokploy-network:
+    external: true
+```
+
+Commit and push to your fork.
+
+### Step 1.2 — Create Supabase Compose service in Dokploy
+
+Dokploy UI → **New Project** (name it `supabase`) → **New Service** → **Compose**:
+- Compose Type: `Docker Compose`
+- Provider: GitHub → your forked repo → branch: `master`
+- Compose Path: `./docker/docker-compose.yml`
+- Click **Save**
+
+### Step 1.3 — Set Supabase environment variables
+
+Dokploy UI → supabase Compose service → **Environment** tab.
+
+Generate secrets first — use the Supabase key generator at:
+`https://supabase.com/docs/guides/self-hosting/docker#generate-api-keys`
+
+| Name | Value |
+|---|---|
+| `POSTGRES_PASSWORD` | *(strong generated password)* |
+| `JWT_SECRET` | *(32+ char random string)* |
+| `ANON_KEY` | *(generated from JWT_SECRET)* |
+| `SERVICE_ROLE_KEY` | *(generated from JWT_SECRET)* |
+| `DASHBOARD_USERNAME` | `supabase` |
+| `DASHBOARD_PASSWORD` | *(strong password)* |
+| `API_EXTERNAL_URL` | `https://brain-db.shapememory.eu` |
+| `SITE_URL` | `https://brain-db.shapememory.eu` |
+| `POSTGRES_HOST` | `db` |
+| `POSTGRES_DB` | `postgres` |
+| `POSTGRES_PORT` | `5432` |
+
+### Step 1.4 — Configure Supabase domain (optional)
+
+Dokploy UI → supabase Compose → **Domains** tab → Add Domain:
+- Host: `brain-db.shapememory.eu`
+- Service: `kong`
+- Port: `8000`
+- HTTPS: enabled
+
+### Step 1.5 — Deploy Supabase
+
+Click **Deploy**. Wait for all containers to become healthy (~3-5 min).
+Verify at `https://supabase.yourdomain.eu` — Studio should load.
 
 ---
 
-## Step 2 — Create the shared Docker network
+## Part 2 — Deploy GBrain in Dokploy
 
-On the Hetzner server, run **once**:
+### Step 2.1 — Prepare host directories
 
-```bash
-docker network create supabase-gbrain
+Dokploy UI → supabase Compose → **Terminal** tab (on the `db` service), run:
+
+```
+psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 ```
 
-Then connect Supabase's `db` container to this network:
-
-```bash
-# After Supabase is running, connect its db container to the shared network.
-# The container name follows the pattern: <project>-db-1
-docker network connect supabase-gbrain supabase-db-1
+Then on the **Hetzner server** (SSH or Dokploy server terminal):
+```
+mkdir -p /var/www/hilvara/gbrain/brain
+mkdir -p /var/www/hilvara/gbrain/config
 ```
 
-> To make this permanent, add `supabase-gbrain` as an external network to
-> Supabase's `docker-compose.yml` under the `db` service — so it reconnects
-> automatically on every Supabase restart.
+### Step 2.2 — Create GBrain Compose service in Dokploy
 
----
+Dokploy UI → **New Project** (name it `gbrain`) → **New Service** → **Compose**:
+- Compose Type: `Docker Compose`
+- Provider: GitHub → this repo → branch: `main`
+- Compose Path: `./docker-compose.yml`
+- Click **Save**
 
-## Step 3 — Set environment variables (Dokploy Environment tab)
+### Step 2.3 — Set GBrain environment variables
+
+Dokploy UI → gbrain Compose service → **Environment** tab:
 
 | Name | Value | Notes |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://postgres:PASSWORD@supabase-db-1:5432/postgres` | Container name from Step 2 |
+| `DATABASE_URL` | `postgresql://postgres:PASSWORD@supabase-db:5432/postgres` | Use your Supabase POSTGRES_PASSWORD |
 | `OPENAI_API_KEY` | `sk-...` | Required — vector embeddings |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Recommended — query expansion |
 | `GROQ_API_KEY` | *(blank if unused)* | Optional — voice transcription |
 | `GBRAIN_DOMAIN` | `brain.yourdomain.eu` | Your public domain |
 | `MINIONS_CONCURRENCY` | `4` | Parallel background jobs |
 
----
+> `supabase-db` is the fixed container name set in Step 1.1.
+> Both services are on `dokploy-network` so this resolves directly.
 
-## Step 4 — Prepare host directories and deploy
+### Step 2.4 — Configure GBrain domain
 
-```bash
-mkdir -p /var/www/hilvara/gbrain/{brain,config}
+Dokploy UI → gbrain Compose → **Domains** tab → Add Domain:
+- Host: `brain.yourdomain.eu`
+- Service: `gbrain`
+- Port: `8787`
+- HTTPS: enabled, Let's Encrypt
+
+### Step 2.5 — Deploy GBrain
+
+Click **Deploy**. Expected healthy boot log:
+```
+[gbrain] Supabase Postgres is ready.
+[gbrain] First run — initialising schema...
+[gbrain] Init complete.
+[gbrain] Starting MCP server on port 8787...
 ```
 
-Push this repo to GitHub. In Dokploy:
-1. **New Project → New Service → Compose → GitHub** → select this repo
-2. Compose Path: `./docker-compose.yml`
-3. **Domains** tab → service: `gbrain` → port: `8787` → HTTPS on
-4. Click **Deploy**
-
 ---
 
-## Step 5 — Create Bearer tokens
+## Part 3 — Post-deploy setup
 
-Dokploy UI → **gbrain** service → **Terminal** tab:
+### Step 3.1 — Create Bearer tokens
+
+Dokploy UI → gbrain Compose → **gbrain** service → **Terminal** tab:
 
 ```bash
 bun /gbrain/src/commands/auth.ts create "claude-code"
 bun /gbrain/src/commands/auth.ts create "cowork"
 bun /gbrain/src/commands/auth.ts create "hermes"
 bun /gbrain/src/commands/auth.ts create "openclaw"
-
 bun /gbrain/src/commands/auth.ts list
 ```
 
----
+### Step 3.2 — Schedule Jobs
 
-## Step 6 — Schedule Jobs
-
-Dokploy → Compose service → **Schedule Jobs** → **Add Job**.
+Dokploy UI → gbrain Compose service → **Schedule Jobs** tab → **Add Job**.
 Type = **Compose**, Service = `gbrain`, Shell = `sh`, Timezone = `Europe/Rome`.
 
 | Name | Cron | Command |
@@ -145,9 +177,7 @@ Type = **Compose**, Service = `gbrain`, Shell = `sh`, Timezone = `Europe/Rome`.
 | `gbrain-prune` | `0 1 * * *` | `gbrain jobs prune --older-than 30d` |
 | `gbrain-doctor` | `0 3 * * 0` | `gbrain doctor --json && gbrain embed --stale` |
 
----
-
-## Step 7 — Connect clients
+### Step 3.3 — Connect clients
 
 **Claude Code (Mac Mini):**
 ```bash
@@ -159,12 +189,12 @@ claude mcp add gbrain -t http https://brain.yourdomain.eu/mcp \
 - URL: `https://brain.yourdomain.eu/mcp`
 - Auth: Bearer token
 
-**Hermes / OpenClaw (same server):** `http://gbrain:8787/mcp`
+**Hermes / OpenClaw (same Dokploy server):**
+Internal — no Traefik needed: `http://gbrain:8787/mcp`
 
----
+### Step 3.4 — Import brain content
 
-## Step 8 — Import brain content
-
+Dokploy UI → gbrain Compose → **gbrain** service → **Terminal**:
 ```bash
 gbrain import /brain --no-embed
 gbrain embed --stale
@@ -175,19 +205,19 @@ gbrain stats
 
 ---
 
-## Day-to-day
+## Day-to-day operations
 
+All via Dokploy UI → gbrain Compose → gbrain service → Terminal:
 ```bash
 gbrain doctor
 gbrain stats
-gbrain dream
 gbrain jobs list
 bun /gbrain/src/commands/auth.ts list
 ```
 
 ## Upgrade GBrain
 
-Click **Deploy** in Dokploy. Then in Terminal:
+Dokploy UI → gbrain Compose → click **Deploy** (rebuilds from latest master). Then Terminal:
 ```bash
 gbrain init --url "$DATABASE_URL"
 gbrain post-upgrade
