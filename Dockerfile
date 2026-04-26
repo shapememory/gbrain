@@ -52,7 +52,9 @@ RUN printf '#!/bin/sh\nexec bun /gbrain/src/cli.ts "$@"\n' \
 # Brain repo (markdown knowledge files) — mounted as a volume by compose
 VOLUME ["/brain"]
 
-WORKDIR /brain
+# Working directory must be the gbrain installation dir, not the brain volume.
+# GBrain resolves skills/, docs/, recipes/ relative to its own source root.
+WORKDIR /gbrain
 
 # Copy entrypoints
 COPY entrypoint.sh        /entrypoint.sh
