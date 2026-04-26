@@ -2,8 +2,8 @@
 # GBrain — Dokploy Compose deployment
 #
 # Database: self-hosted Supabase (separate Dokploy Compose project).
-# GBrain connects to Supabase's db container over the shared
-# supabase-gbrain network. See README Step 1 for Supabase setup.
+# GBrain connects to Supabase's db container via dokploy-network,
+# which Dokploy creates automatically — no manual network setup needed.
 #
 # SERVICES:
 #   gbrain         MCP HTTP server    (Traefik → port 8787)
@@ -39,8 +39,7 @@ services:
     entrypoint: ["/entrypoint.sh"]
     networks:
       - gbrain-internal      # gbrain ↔ worker
-      - supabase-gbrain      # gbrain → supabase db
-      - dokploy-network      # Traefik routing
+      - dokploy-network      # Traefik routing + Supabase db access
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=dokploy-network"
@@ -76,19 +75,12 @@ services:
     entrypoint: ["/worker-entrypoint.sh"]
     networks:
       - gbrain-internal      # gbrain ↔ worker
-      - supabase-gbrain      # worker → supabase db (Minions queue)
+      - dokploy-network      # Supabase db access (Minions queue)
 
 # ── Networks ───────────────────────────────────────────────────────────────────
 networks:
   gbrain-internal:
-    driver: bridge
+    driver: bridge            # gbrain ↔ gbrain-worker (private)
 
-  # Shared with Supabase's compose stack — created once, used by both.
-  # Create before deploying either stack:
-  #   docker network create supabase-gbrain
-  supabase-gbrain:
-    external: true
-
-  # Dokploy's Traefik network — already exists.
   dokploy-network:
-    external: true
+    external: true            # Dokploy creates this — Traefik + Supabase db access
