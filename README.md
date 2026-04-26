@@ -26,9 +26,15 @@ gbrain-deploy/
 
 ---
 
-## Step 1 — Push to GitHub
+## Step 1 — Prepare host directories and push to GitHub
 
-Push this directory to a GitHub repo (public or private).
+Create the persistent storage directories on the Hetzner server before first deploy:
+
+```bash
+mkdir -p /var/www/hilvara/gbrain/{postgres,brain,config}
+```
+
+Then push this directory to a GitHub repo (public or private).
 
 ---
 
