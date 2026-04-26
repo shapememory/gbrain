@@ -1,26 +1,18 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # GBrain MCP Server entrypoint
-# Role: wait for Supabase db → init schema → gbrain serve
+# DATABASE_URL uses postgres.gbrain username (Supabase dot-notation format)
+# which satisfies GBrain's URL validator. gbrain init --url uses this directly.
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
 INIT_MARKER="/root/.gbrain/.initialized"
-
 log() { echo "[gbrain] $*"; }
 
-# ── 1. Wait for Supabase Postgres ─────────────────────────────────────────────
-# Supabase db container is reachable as "supabase-db" via the supabase-gbrain
-# network. Extract host from DATABASE_URL for pg_isready.
-DB_HOST=$(echo "$DATABASE_URL" | sed 's|.*@||' | sed 's|:.*||' | sed 's|/.*||')
-DB_PORT=$(echo "$DATABASE_URL" | sed 's|.*:||' | sed 's|/.*||')
-DB_USER=$(echo "$DATABASE_URL" | sed 's|.*://||' | sed 's|:.*||')
-
-log "Waiting for Supabase Postgres at ${DB_HOST}:${DB_PORT:-5432}..."
-until pg_isready -h "${DB_HOST}" -p "${DB_PORT:-5432}" -U "${DB_USER:-postgres}" -q; do
-  sleep 2
-done
-log "Supabase Postgres is ready."
+# ── 1. Wait for Postgres ──────────────────────────────────────────────────────
+log "Waiting for Postgres..."
+until pg_isready -h postgres -U postgres -q; do sleep 2; done
+log "Postgres ready."
 
 # ── 2. Schema init / migrations ───────────────────────────────────────────────
 if [ ! -f "$INIT_MARKER" ]; then
@@ -28,27 +20,27 @@ if [ ! -f "$INIT_MARKER" ]; then
   gbrain init --url "$DATABASE_URL"
 
   if find /brain -name "*.md" -maxdepth 3 2>/dev/null | grep -q .; then
-    log "Brain volume has content — importing..."
+    log "Importing brain content..."
     gbrain import /brain --no-embed
     gbrain embed --stale
     gbrain extract links --source db
     gbrain extract timeline --source db
     gbrain stats
   else
-    log "Brain volume is empty — add markdown files to /var/www/hilvara/gbrain/brain/"
+    log "Brain volume empty — add markdown to /var/www/hilvara/gbrain/brain/"
   fi
 
   touch "$INIT_MARKER"
   log "Init complete."
 else
-  log "Applying schema migrations (idempotent)..."
+  log "Applying schema migrations..."
   gbrain init --url "$DATABASE_URL" 2>&1 | grep -v "^$" || true
 fi
 
 # ── 3. Health check ───────────────────────────────────────────────────────────
 log "Running gbrain doctor --fast..."
-gbrain doctor --fast 2>&1 || log "Warning: doctor reported issues — check logs"
+gbrain doctor --fast 2>&1 || log "Doctor warnings present — continuing"
 
-# ── 4. Start MCP HTTP server ──────────────────────────────────────────────────
+# ── 4. Start MCP server ───────────────────────────────────────────────────────
 log "Starting MCP server on port ${GBRAIN_PORT:-8787}..."
 exec gbrain serve

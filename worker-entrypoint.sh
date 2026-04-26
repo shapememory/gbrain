@@ -1,21 +1,14 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # GBrain Minions Worker entrypoint
-# Role: wait for gbrain MCP server → start Minions supervisor
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
 log() { echo "[worker] $*"; }
 
-# ── 1. Wait for Supabase Postgres ─────────────────────────────────────────────
-DB_HOST=$(echo "$DATABASE_URL" | sed 's|.*@||' | sed 's|:.*||' | sed 's|/.*||')
-DB_PORT=$(echo "$DATABASE_URL" | sed 's|.*:||' | sed 's|/.*||')
-DB_USER=$(echo "$DATABASE_URL" | sed 's|.*://||' | sed 's|:.*||')
-
-log "Waiting for Supabase Postgres at ${DB_HOST}:${DB_PORT:-5432}..."
-until pg_isready -h "${DB_HOST}" -p "${DB_PORT:-5432}" -U "${DB_USER:-postgres}" -q; do
-  sleep 2
-done
+# ── 1. Wait for Postgres ──────────────────────────────────────────────────────
+log "Waiting for Postgres..."
+until pg_isready -h postgres -U postgres -q; do sleep 2; done
 log "Postgres ready."
 
 # ── 2. Wait for gbrain MCP server ─────────────────────────────────────────────
@@ -29,13 +22,13 @@ while [ $RETRIES -gt 0 ]; do
   sleep 3
 done
 [ $RETRIES -eq 0 ] \
-  && log "Warning: gbrain did not respond in time — starting worker anyway" \
-  || log "gbrain MCP server is ready."
+  && log "gbrain slow to start — proceeding anyway" \
+  || log "gbrain ready."
 
-# ── 3. Verify Minions job queue ───────────────────────────────────────────────
+# ── 3. Verify Minions queue ───────────────────────────────────────────────────
 log "Running gbrain jobs smoke..."
-gbrain jobs smoke 2>&1 || log "Warning: jobs smoke check failed — proceeding"
+gbrain jobs smoke 2>&1 || log "Smoke warnings — proceeding"
 
-# ── 4. Start Minions supervisor ───────────────────────────────────────────────
+# ── 4. Start supervisor ───────────────────────────────────────────────────────
 log "Starting Minions supervisor (concurrency=${MINIONS_CONCURRENCY:-4})..."
 exec gbrain jobs supervisor --concurrency "${MINIONS_CONCURRENCY:-4}"
