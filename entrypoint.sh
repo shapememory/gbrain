@@ -21,8 +21,8 @@ log "Postgres is ready."
 
 # ── 2. First-run: init schema + import brain ──────────────────────────────────
 if [ ! -f "$INIT_MARKER" ]; then
-  log "First run detected — running gbrain init --supabase..."
-  gbrain init --supabase
+  log "First run detected — running gbrain init --url..."
+  gbrain init --url "$DATABASE_URL"
 
   # Import markdown files if the brain volume already has content
   if find /brain -name "*.md" -maxdepth 3 2>/dev/null | grep -q .; then
@@ -43,7 +43,7 @@ if [ ! -f "$INIT_MARKER" ]; then
 else
   # On every restart: apply any pending schema migrations (idempotent)
   log "Applying schema migrations (idempotent)..."
-  gbrain init --supabase 2>&1 | grep -v "^$" || true
+  gbrain init --url "$DATABASE_URL" 2>&1 | grep -v "^$" || true
 fi
 
 # ── 3. Quick health check ─────────────────────────────────────────────────────
