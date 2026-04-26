@@ -1,0 +1,136 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GBrain — Dokploy Compose deployment
+#
+# SERVICES:
+#   postgres       Postgres 16 + pgvector  (internal only)
+#   gbrain         MCP HTTP server         (Traefik → port 8787)
+#   gbrain-worker  Minions job supervisor  (internal only)
+#
+# SCHEDULED MAINTENANCE (sync, dream, doctor):
+#   Handled by Dokploy's built-in Schedule Jobs — NOT a container.
+#   See README → "Step 6: Schedule Jobs" for the exact commands to add.
+#
+# DEPLOY STEPS (Dokploy UI):
+#   1. New Project → New Service → Compose → GitHub → select this repo
+#   2. Compose Path: ./docker-compose.yml
+#   3. Environment tab → set all variables (see README Step 3)
+#   4. Domains tab → Add domain → service: gbrain → port: 8787 → HTTPS on
+#   5. Click Deploy
+#   6. After first healthy boot: create tokens (see README)
+#   7. Schedule Jobs tab → add the 4 maintenance jobs (see README)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Postgres 16 + pgvector ──────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gbrain}
+      POSTGRES_USER: ${POSTGRES_USER:-gbrain}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gbrain} -d ${POSTGRES_DB:-gbrain}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - gbrain-internal
+
+  # ── GBrain MCP Server ───────────────────────────────────────────────────────
+  # Public-facing: Traefik routes HTTPS → port 8787
+  # This is also the target container for Dokploy Schedule Jobs
+  gbrain:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GBRAIN_REF: master      # pin for stable builds, e.g. v0.19.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gbrain}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gbrain}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-gbrain}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GBRAIN_PORT: "8787"
+      GBRAIN_ENGINE: postgres
+      GBRAIN_BRAIN_PATH: /brain
+    volumes:
+      - brain-data:/brain
+      - gbrain-config:/root/.gbrain
+    entrypoint: ["/entrypoint.sh"]
+    networks:
+      - gbrain-internal
+      - dokploy-network
+    labels:
+      # ── Traefik labels ─────────────────────────────────────────────────────
+      # OPTION A (recommended): configure domain in Dokploy Domains UI tab.
+      # Dokploy injects labels automatically — delete this entire labels block.
+      #
+      # OPTION B: manual labels below (keep if you prefer compose-as-code).
+      # Set GBRAIN_DOMAIN in environment vars.
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.gbrain.rule=Host(`${GBRAIN_DOMAIN}`)"
+      - "traefik.http.routers.gbrain.entrypoints=websecure"
+      - "traefik.http.routers.gbrain.tls=true"
+      - "traefik.http.routers.gbrain.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gbrain.service=gbrain-svc"
+      - "traefik.http.services.gbrain-svc.loadbalancer.server.port=8787"
+      - "traefik.http.routers.gbrain-http.rule=Host(`${GBRAIN_DOMAIN}`)"
+      - "traefik.http.routers.gbrain-http.entrypoints=web"
+      - "traefik.http.routers.gbrain-http.middlewares=redirect-to-https@file"
+
+  # ── Minions Worker ──────────────────────────────────────────────────────────
+  # Durable Postgres-native job queue for background/deterministic work.
+  # Internal only — no Traefik, no external exposure.
+  gbrain-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gbrain:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gbrain}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gbrain}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-gbrain}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GBRAIN_ENGINE: postgres
+      GBRAIN_BRAIN_PATH: /brain
+      MINIONS_CONCURRENCY: ${MINIONS_CONCURRENCY:-4}
+    volumes:
+      - brain-data:/brain
+      - gbrain-config:/root/.gbrain
+    entrypoint: ["/worker-entrypoint.sh"]
+    networks:
+      - gbrain-internal
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
+  brain-data:
+  gbrain-config:
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+networks:
+  gbrain-internal:
+    driver: bridge
+  dokploy-network:
+    external: true
