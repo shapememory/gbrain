@@ -45,5 +45,8 @@ gbrain doctor --fast 2>&1 || log "Doctor warnings present — continuing"
 # Redirect stdin from /dev/null — in Docker there is no interactive stdin.
 # Without this, gbrain serve (stdio MCP mode) exits immediately when it
 # detects no input, causing an endless container restart loop.
-log "Starting MCP server on port ${GBRAIN_PORT:-8787}..."
-exec gbrain serve < /dev/null
+# Start the HTTP gateway which keeps gbrain serve (stdio) alive internally
+# and exposes it over HTTP on GBRAIN_PORT (default 8787).
+# gbrain serve is stdio-only; the gateway is required for remote HTTP access.
+log "Starting HTTP MCP gateway on port ${GBRAIN_PORT:-8787}..."
+exec bun /gateway.ts < /dev/null

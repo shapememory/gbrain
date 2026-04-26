@@ -42,6 +42,7 @@ WORKDIR /gbrain
 
 COPY entrypoint.sh        /entrypoint.sh
 COPY worker-entrypoint.sh /worker-entrypoint.sh
+COPY gateway.ts           /gateway.ts
 RUN chmod +x /entrypoint.sh /worker-entrypoint.sh
 
 EXPOSE 8787
