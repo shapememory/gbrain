@@ -42,5 +42,8 @@ log "Running gbrain doctor --fast..."
 gbrain doctor --fast 2>&1 || log "Doctor warnings present — continuing"
 
 # ── 4. Start MCP server ───────────────────────────────────────────────────────
+# Redirect stdin from /dev/null — in Docker there is no interactive stdin.
+# Without this, gbrain serve (stdio MCP mode) exits immediately when it
+# detects no input, causing an endless container restart loop.
 log "Starting MCP server on port ${GBRAIN_PORT:-8787}..."
-exec gbrain serve
+exec gbrain serve < /dev/null
