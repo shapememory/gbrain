@@ -1,7 +1,7 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
 # GBrain Minions Worker entrypoint
-# Role: wait for Postgres + gbrain MCP → start job supervisor
+# Role: wait for Postgres + gbrain MCP → write config → start job supervisor
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
@@ -17,8 +17,8 @@ until pg_isready \
 done
 log "Postgres ready."
 
-# ── 2. Wait for gbrain MCP server to respond ─────────────────────────────────
-log "Waiting for gbrain MCP server to be available..."
+# ── 2. Wait for gbrain MCP server ─────────────────────────────────────────────
+log "Waiting for gbrain MCP server..."
 RETRIES=30
 while [ $RETRIES -gt 0 ]; do
   if curl -sf --max-time 3 "http://gbrain:${GBRAIN_PORT:-8787}/health" > /dev/null 2>&1; then
@@ -27,19 +27,25 @@ while [ $RETRIES -gt 0 ]; do
   RETRIES=$((RETRIES - 1))
   sleep 3
 done
+[ $RETRIES -eq 0 ] \
+  && log "Warning: gbrain did not respond in time — starting worker anyway" \
+  || log "gbrain MCP server is ready."
 
-if [ $RETRIES -eq 0 ]; then
-  log "Warning: gbrain MCP server did not respond in time — starting worker anyway"
-else
-  log "gbrain MCP server is ready."
-fi
+# ── 3. Write config.json ──────────────────────────────────────────────────────
+# Same as gbrain service — ensures all gbrain commands use Postgres, not PGLite
+mkdir -p /root/.gbrain
+cat > /root/.gbrain/config.json <<GBCONFIG
+{
+  "engine": "postgres",
+  "databaseUrl": "${DATABASE_URL}"
+}
+GBCONFIG
+log "Config written: engine=postgres"
 
-# ── 3. Verify job queue schema ────────────────────────────────────────────────
+# ── 4. Verify Minions job queue ───────────────────────────────────────────────
 log "Running gbrain jobs smoke..."
 gbrain jobs smoke 2>&1 || log "Warning: jobs smoke check failed — proceeding"
 
-# ── 4. Start Minions supervisor ───────────────────────────────────────────────
-# supervisor = auto-restarting worker with exponential backoff + PID locking
-# Survives crashes, atomic audit events, structured logs
+# ── 5. Start Minions supervisor ───────────────────────────────────────────────
 log "Starting Minions supervisor (concurrency=${MINIONS_CONCURRENCY:-4})..."
 exec gbrain jobs supervisor --concurrency "${MINIONS_CONCURRENCY:-4}"
