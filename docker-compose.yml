@@ -23,9 +23,8 @@
 #   7. Schedule Jobs: add 4 maintenance jobs
 # ─────────────────────────────────────────────────────────────────────────────
 version: "3.8"
-services:
 
-  # ── Postgres 16 + pgvector ──────────────────────────────────────────────────
+services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
@@ -35,8 +34,6 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - /var/www/hilvara/gbrain/postgres:/var/lib/postgresql/data
-      # Shell init script — interpolates POSTGRES_PASSWORD to create
-      # the postgres.gbrain superuser GBrain's URL validator expects.
       - ./init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
@@ -45,7 +42,6 @@ services:
       retries: 15
       start_period: 45s
 
-  # ── GBrain MCP Server ───────────────────────────────────────────────────────
   gbrain:
     build:
       context: .
@@ -57,7 +53,6 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Dot-notation username satisfies GBrain's Supabase pooler URL validator
       DATABASE_URL: postgresql://postgres.gbrain:${POSTGRES_PASSWORD}@postgres:5432/postgres
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -68,22 +63,9 @@ services:
       - /var/www/hilvara/gbrain/brain:/brain
       - /var/www/hilvara/gbrain/config:/root/.gbrain
     entrypoint: ["/entrypoint.sh"]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=dokploy-network"
-      # HTTP Router
-      - "traefik.http.routers.gbrain-http.rule=Host(`${GBRAIN_DOMAIN}`)"
-      - "traefik.http.routers.gbrain-http.entrypoints=web"
-      - "traefik.http.routers.gbrain-http.middlewares=redirect-to-https@file"
-      - "traefik.http.routers.gbrain-http.service=gbrain-svc"
-      # HTTPS Router
-      - "traefik.http.routers.gbrain.rule=Host(`${GBRAIN_DOMAIN}`)"
-      - "traefik.http.routers.gbrain.entrypoints=websecure"
-      - "traefik.http.routers.gbrain.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.gbrain.service=gbrain-svc"
-      # Service
-      - "traefik.http.services.gbrain-svc.loadbalancer.server.port=8787"  
-  # ── GBrain Minions Worker ───────────────────────────────────────────────────
+    expose:
+      - "8787"
+
   gbrain-worker:
     build:
       context: .
@@ -106,7 +88,3 @@ services:
       - /var/www/hilvara/gbrain/config:/root/.gbrain
     entrypoint: ["/worker-entrypoint.sh"]
 
-# ── Networks ───────────────────────────────────────────────────────────────────
-networks:
-  dokploy-network:
-    external: true        # Dokploy creates this — Traefik routing for gbrain
