@@ -41,6 +41,8 @@ services:
       timeout: 5s
       retries: 15
       start_period: 45s
+    networks:
+      - gbrain-internal
 
   gbrain:
     build:
@@ -65,6 +67,24 @@ services:
     entrypoint: ["/entrypoint.sh"]
     expose:
       - "8787"
+    networks:
+      - gbrain-internal
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+
+      - "traefik.http.routers.gbrain-http.rule=Host(`gbrain.shapememory.eu`)"
+      - "traefik.http.routers.gbrain-http.entrypoints=web"
+      - "traefik.http.routers.gbrain-http.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.gbrain-http.service=gbrain-svc"
+
+      - "traefik.http.routers.gbrain.rule=Host(`gbrain.shapememory.eu`)"
+      - "traefik.http.routers.gbrain.entrypoints=websecure"
+      - "traefik.http.routers.gbrain.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gbrain.service=gbrain-svc"
+
+      - "traefik.http.services.gbrain-svc.loadbalancer.server.port=8787"
 
   gbrain-worker:
     build:
@@ -87,4 +107,12 @@ services:
       - /var/www/hilvara/gbrain/brain:/brain
       - /var/www/hilvara/gbrain/config:/root/.gbrain
     entrypoint: ["/worker-entrypoint.sh"]
+    networks:
+      - gbrain-internal
+
+networks:
+  gbrain-internal:
+    driver: bridge
+  dokploy-network:
+    external: true
 
