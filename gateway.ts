@@ -15,10 +15,8 @@ import postgres from 'postgres';
 const PORT = parseInt(Bun.env.GBRAIN_PORT ?? '8787');
 const DATABASE_URL = Bun.env.DATABASE_URL!;
 
-// ── Database connection ───────────────────────────────────────────────────────
 const db = postgres(DATABASE_URL);
 
-// ── Token validation ──────────────────────────────────────────────────────────
 const tokenCache = new Map<string, { valid: boolean; ts: number }>();
 const TOKEN_TTL = 5 * 60 * 1000;
 
@@ -42,7 +40,6 @@ async function isValidToken(token: string): Promise<boolean> {
   }
 }
 
-// ── Persistent gbrain serve process ──────────────────────────────────────────
 type QueueEntry = { msg: string; resolve: (r: string) => void; reject: (e: Error) => void };
 let gbrainProc: ReturnType<typeof Bun.spawn>;
 let readBuffer = '';
@@ -96,7 +93,6 @@ function drainQueue() {
     pending.shift();
     reject(new Error('gbrain serve response timeout (30s)'));
     locked = false;
-    // Kill stale process — it may be stuck mid-protocol handshake
     gbrainProc.kill();
     gbrainProc = spawnGbrain();
     drainQueue();
@@ -119,11 +115,9 @@ async function callGbrain(msg: string): Promise<string> {
   });
 }
 
-// ── Start the gbrain process ──────────────────────────────────────────────────
 gbrainProc = spawnGbrain();
 console.log('[gateway] gbrain serve process started');
 
-// ── HTTP Server ───────────────────────────────────────────────────────────────
 Bun.serve({
   port: PORT,
   async fetch(req: Request): Promise<Response> {
@@ -140,6 +134,7 @@ Bun.serve({
         { status: 401 }
       );
     }
+
     const valid = await isValidToken(auth.slice(7));
     if (!valid) {
       return Response.json(
@@ -151,6 +146,16 @@ Bun.serve({
     if (pathname === '/mcp' && req.method === 'POST') {
       try {
         const body = await req.text();
+
+        let parsed: Record<string, unknown> = {};
+        try { parsed = JSON.parse(body); } catch { /* invalid json, treat as request */ }
+
+        // JSON-RPC notifications have no id — gbrain won't send a response
+        if (parsed.id === undefined || parsed.id === null) {
+          gbrainProc.stdin.write(body + '\n');
+          return new Response(null, { status: 202 });
+        }
+
         const response = await callGbrain(body);
         return new Response(response, {
           headers: { 'Content-Type': 'application/json' },
