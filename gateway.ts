@@ -164,23 +164,30 @@ Bun.serve({
     // mcp-remote opens this with GET to receive server-initiated messages.
     if (pathname === '/mcp' && req.method === 'GET') {
       const encoder = new TextEncoder();
+      let intervalId: ReturnType<typeof setInterval> | null = null;
+
       const stream = new ReadableStream({
         start(controller) {
           controller.enqueue(encoder.encode(': connected\n\n'));
-          const interval = setInterval(() => {
+          intervalId = setInterval(() => {
             try {
               controller.enqueue(encoder.encode(': keepalive\n\n'));
             } catch {
-              clearInterval(interval);
+              if (intervalId) clearInterval(intervalId);
             }
-          }, 30_000);
+          }, 15_000);
+        },
+        cancel() {
+          if (intervalId) clearInterval(intervalId);
         },
       });
+
       return new Response(stream, {
         headers: {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
         },
       });
     }
@@ -214,4 +221,5 @@ Bun.serve({
 });
 
 console.log(`[gateway] HTTP MCP gateway listening on :${PORT}`);
+console.log(`[gateway] MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
 console.log(`[gateway] MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
