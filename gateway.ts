@@ -3,44 +3,43 @@
  *
  * gbrain serve speaks stdio-only. This gateway:
  *   1. Keeps one persistent gbrain serve process alive
- *   2. Validates Bearer tokens against gbrain's api_tokens table
+ *   2. Validates Bearer tokens against gbrain's access_tokens table
  *   3. Routes POST /mcp → gbrain stdin → response → HTTP
  *   4. Queues concurrent requests (gbrain serves one at a time, state is in DB)
  *
  * Port: GBRAIN_PORT env var (default 8787)
  */
-
 import { createHash } from 'node:crypto';
+import postgres from 'postgres';
 
 const PORT = parseInt(Bun.env.GBRAIN_PORT ?? '8787');
 const DATABASE_URL = Bun.env.DATABASE_URL!;
 
-// ── Token validation ──────────────────────────────────────────────────────────
-// GBrain stores tokens SHA-256 hashed in the api_tokens table.
-// Cache for 5 minutes to avoid repeated DB round-trips.
+// ── Database connection ───────────────────────────────────────────────────────
+const db = postgres(DATABASE_URL);
 
+// ── Token validation ──────────────────────────────────────────────────────────
+// GBrain stores tokens SHA-256 hashed in the access_tokens table.
+// Cache for 5 minutes to avoid repeated DB round-trips.
 const tokenCache = new Map<string, { valid: boolean; ts: number }>();
 const TOKEN_TTL = 5 * 60 * 1000;
 
 async function isValidToken(token: string): Promise<boolean> {
   const cached = tokenCache.get(token);
   if (cached && Date.now() - cached.ts < TOKEN_TTL) return cached.valid;
-
   const hash = createHash('sha256').update(token).digest('hex');
   try {
-    const proc = Bun.spawn(
-      ['psql', DATABASE_URL, '-At', '-c',
-       `SELECT 1 FROM api_tokens WHERE token_hash='${hash}' LIMIT 1`],
-      { stdout: 'pipe', stderr: 'ignore' }
-    );
-    const out = await new Response(proc.stdout).text();
-    const valid = out.trim() === '1';
+    const rows = await db`
+      SELECT 1 FROM access_tokens
+      WHERE token_hash = ${hash}
+        AND revoked_at IS NULL
+      LIMIT 1
+    `;
+    const valid = rows.length > 0;
     tokenCache.set(token, { valid, ts: Date.now() });
     return valid;
-  } catch {
-    // psql failed — allow request anyway to avoid blocking on DB outage.
-    // In production add alerting here.
-    console.error('[gateway] token validation failed — failing open');
+  } catch (err) {
+    console.error('[gateway] token validation failed — failing open', err);
     return true;
   }
 }
@@ -48,9 +47,7 @@ async function isValidToken(token: string): Promise<boolean> {
 // ── Persistent gbrain serve process ──────────────────────────────────────────
 // One process, one queue. gbrain stdio is synchronous: one JSON-RPC message
 // in → one JSON-RPC response out. Concurrent requests are serialised.
-
 type QueueEntry = { msg: string; resolve: (r: string) => void; reject: (e: Error) => void };
-
 let gbrainProc: ReturnType<typeof Bun.spawn>;
 let readBuffer = '';
 let locked = false;
@@ -100,7 +97,6 @@ function spawnGbrain() {
 function drainQueue() {
   if (locked || queue.length === 0) return;
   locked = true;
-
   const { msg, resolve, reject } = queue.shift()!;
 
   const timer = setTimeout(() => {
@@ -134,7 +130,6 @@ console.log('[gateway] gbrain serve process started');
 // ── HTTP Server ───────────────────────────────────────────────────────────────
 Bun.serve({
   port: PORT,
-
   async fetch(req: Request): Promise<Response> {
     const { pathname } = new URL(req.url);
 
@@ -151,11 +146,10 @@ Bun.serve({
         { status: 401 }
       );
     }
-
     const valid = await isValidToken(auth.slice(7));
     if (!valid) {
       return Response.json(
-        { error: 'invalid_token', message: 'Token not found — create one with: bun /gbrain/src/commands/auth.ts create "name"' },
+        { error: 'invalid_token', message: 'Token not found — create one with: bun run src/commands/auth.ts create "name"' },
         { status: 401 }
       );
     }
