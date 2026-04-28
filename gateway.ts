@@ -19,8 +19,6 @@ const DATABASE_URL = Bun.env.DATABASE_URL!;
 const db = postgres(DATABASE_URL);
 
 // ── Token validation ──────────────────────────────────────────────────────────
-// GBrain stores tokens SHA-256 hashed in the access_tokens table.
-// Cache for 5 minutes to avoid repeated DB round-trips.
 const tokenCache = new Map<string, { valid: boolean; ts: number }>();
 const TOKEN_TTL = 5 * 60 * 1000;
 
@@ -45,8 +43,6 @@ async function isValidToken(token: string): Promise<boolean> {
 }
 
 // ── Persistent gbrain serve process ──────────────────────────────────────────
-// One process, one queue. gbrain stdio is synchronous: one JSON-RPC message
-// in → one JSON-RPC response out. Concurrent requests are serialised.
 type QueueEntry = { msg: string; resolve: (r: string) => void; reject: (e: Error) => void };
 let gbrainProc: ReturnType<typeof Bun.spawn>;
 let readBuffer = '';
@@ -60,14 +56,12 @@ function spawnGbrain() {
     {
       stdin: 'pipe',
       stdout: 'pipe',
-      stderr: 'inherit',   // gbrain log messages → container stderr → Dokploy logs
+      stderr: 'inherit',
       cwd: '/gbrain',
       env: Bun.env as Record<string, string>,
     }
   );
 
-  // Pipe stdout → pending callbacks, filter to JSON lines only.
-  // gbrain may emit non-JSON startup text; we skip anything that isn't JSON.
   (async () => {
     const reader = proc.stdout.getReader();
     const dec = new TextDecoder();
@@ -83,7 +77,6 @@ function spawnGbrain() {
       readBuffer = lines.pop() ?? '';
       for (const line of lines) {
         const t = line.trim();
-        // Only dispatch valid JSON objects (MCP responses)
         if (t.startsWith('{') && pending.length > 0) {
           pending.shift()!(t);
         }
@@ -100,9 +93,12 @@ function drainQueue() {
   const { msg, resolve, reject } = queue.shift()!;
 
   const timer = setTimeout(() => {
-    pending.shift();          // remove our callback
+    pending.shift();
     reject(new Error('gbrain serve response timeout (30s)'));
     locked = false;
+    // Kill stale process — it may be stuck mid-protocol handshake
+    gbrainProc.kill();
+    gbrainProc = spawnGbrain();
     drainQueue();
   }, 30_000);
 
@@ -133,12 +129,10 @@ Bun.serve({
   async fetch(req: Request): Promise<Response> {
     const { pathname } = new URL(req.url);
 
-    // Health check — no auth required
     if (pathname === '/health') {
       return new Response('OK', { status: 200 });
     }
 
-    // Auth
     const auth = req.headers.get('Authorization') ?? '';
     if (!auth.startsWith('Bearer ')) {
       return Response.json(
@@ -154,7 +148,6 @@ Bun.serve({
       );
     }
 
-    // MCP endpoint
     if (pathname === '/mcp' && req.method === 'POST') {
       try {
         const body = await req.text();
