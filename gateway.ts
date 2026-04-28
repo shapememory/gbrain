@@ -222,4 +222,3 @@ Bun.serve({
 
 console.log(`[gateway] HTTP MCP gateway listening on :${PORT}`);
 console.log(`[gateway] MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
-console.log(`[gateway] MCP endpoint: http://0.0.0.0:${PORT}/mcp`);
