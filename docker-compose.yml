@@ -22,7 +22,7 @@
 #   6. Terminal: create Bearer tokens
 #   7. Schedule Jobs: add 4 maintenance jobs
 # ─────────────────────────────────────────────────────────────────────────────
-
+version: "3.8"
 services:
 
   # ── Postgres 16 + pgvector ──────────────────────────────────────────────────
@@ -107,6 +107,6 @@ services:
     entrypoint: ["/worker-entrypoint.sh"]
 
 # ── Networks ───────────────────────────────────────────────────────────────────
-
+networks:
   dokploy-network:
     external: true        # Dokploy creates this — Traefik routing for gbrain
