@@ -44,8 +44,6 @@ services:
       timeout: 5s
       retries: 15
       start_period: 45s
-    networks:
-      - gbrain-internal
 
   # ── GBrain MCP Server ───────────────────────────────────────────────────────
   gbrain:
@@ -70,9 +68,6 @@ services:
       - /var/www/hilvara/gbrain/brain:/brain
       - /var/www/hilvara/gbrain/config:/root/.gbrain
     entrypoint: ["/entrypoint.sh"]
-    networks:
-      - gbrain-internal
-      - dokploy-network
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=dokploy-network"
@@ -110,13 +105,8 @@ services:
       - /var/www/hilvara/gbrain/brain:/brain
       - /var/www/hilvara/gbrain/config:/root/.gbrain
     entrypoint: ["/worker-entrypoint.sh"]
-    networks:
-      - gbrain-internal
 
 # ── Networks ───────────────────────────────────────────────────────────────────
-networks:
-  gbrain-internal:
-    driver: bridge        # postgres ↔ gbrain ↔ gbrain-worker (private)
 
   dokploy-network:
     external: true        # Dokploy creates this — Traefik routing for gbrain
