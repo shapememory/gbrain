@@ -73,20 +73,7 @@ services:
     networks:
       - gbrain-internal
       - dokploy-network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=dokploy-network"
-      - "traefik.http.routers.gbrain.rule=Host(`${GBRAIN_DOMAIN:?GBRAIN_DOMAIN is required}`)"
-      - "traefik.http.routers.gbrain.entrypoints=websecure"
-      - "traefik.http.routers.gbrain.tls=true"
-      - "traefik.http.routers.gbrain.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.gbrain.service=gbrain-svc"
-      - "traefik.http.services.gbrain-svc.loadbalancer.server.port=8787"
-      - "traefik.http.routers.gbrain-http.rule=Host(`${GBRAIN_DOMAIN}`)"
-      - "traefik.http.routers.gbrain-http.entrypoints=web"
-      - "traefik.http.routers.gbrain-http.middlewares=redirect-to-https"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"  
-
+      
   # ── GBrain Minions Worker ───────────────────────────────────────────────────
   gbrain-worker:
     build:
